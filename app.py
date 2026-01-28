@@ -156,7 +156,7 @@ def get_credentials():
     except Exception:
         return None
 
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1ea1_cBxiBahTAiFoioGlFpbkWq1icWsSStpbnfqw1V8/edit"
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1ea1_cBxiBahTAiFoioGlFpbkWq1icWsSStpbnfqw1V8/edit?usp=sharing"
 
 @st.cache_data(show_spinner="데이터 동기화 중...")
 def load_data():
@@ -522,3 +522,4 @@ with tabs[5]:
         
         st.dataframe(mission_df, hide_index=True, use_container_width=True, height=calc_height(mission_df))
     else: st.info("미션 없음")
+
