@@ -5,7 +5,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 from googleapiclient.discovery import build
 from streamlit_calendar import calendar
 from datetime import datetime, timedelta
-import plotly.express as px
 import time
 
 # =========================================================
@@ -25,12 +24,11 @@ st.markdown("""
     * { font-family: 'Pretendard', sans-serif !important; }
     .stApp { background-color: #f2f4f6 !important; }
     .toss-card { background-color: #ffffff; padding: 24px; border-radius: 20px; margin-bottom: 16px; box-shadow: 0 4px 16px rgba(0,0,0,0.03); }
-    .metric-card { background-color: #f9fafb; padding: 16px; border-radius: 12px; text-align: center; }
     </style>
 """, unsafe_allow_html=True)
 
 # =========================================================
-# 2. 데이터 로드 함수 (업그레이드 버전)
+# 2. 데이터 로드 함수 (요한님 시트 맞춤형)
 # =========================================================
 @st.cache_resource
 def get_credentials():
@@ -51,16 +49,15 @@ def load_data():
     try:
         doc = client.open_by_url(SHEET_URL)
         
-        # 데이터를 안전하게 가져오는 함수
         def get_df(name):
             try:
-                wb = doc.worksheet(name)
-                data = wb.get_all_records()
+                # 모든 값을 문자열로 가져온 후 처리 (오류 방지)
+                data = doc.worksheet(name).get_all_records()
                 return pd.DataFrame(data)
             except:
-                return pd.DataFrame() # 탭이 없거나 비어있으면 빈 껍데기 반환
+                return pd.DataFrame()
 
-        # 각 시트 데이터 가져오기
+        # 각 시트 가져오기
         exp = get_df("지출내역")
         inc = get_df("수입내역")
         fix = get_df("고정지출")
@@ -69,39 +66,47 @@ def load_data():
         mission = get_df("식비미션")
         budget_plan = get_df("예산계획")
 
-        # 금액 정리 함수 (쉼표, 원 제거)
+        # 1. 금액 정리 함수 (쉼표, 원화기호 제거)
         def clean_money(x):
+            if isinstance(x, (int, float)): return int(x)
             try: return int(str(x).replace(',', '').replace('₩', '').replace(' ', '').split('.')[0])
             except: return 0
             
-        # 날짜 정리 함수 (시간 00:00:00 제거)
-        def clean_date(df, col_name='날짜'):
-            if col_name in df.columns:
-                df[col_name] = pd.to_datetime(df[col_name], errors='coerce').dt.strftime('%Y-%m-%d')
+        # 2. 날짜 정리 함수 (시간 00:00:00 제거)
+        def clean_date(df):
+            if '날짜' in df.columns:
+                # 날짜가 비어있지 않은 행만 처리
+                df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce').dt.strftime('%Y-%m-%d')
+                df = df.dropna(subset=['날짜']) # 날짜 없는 빈 줄 제거
             return df
 
-        # 전처리 적용
+        # --- 데이터 전처리 (요한님 컬럼명에 맞춤) ---
+        
+        # [지출내역]
         if not exp.empty:
             exp = clean_date(exp)
             if '금액' in exp.columns: exp['금액'] = exp['금액'].apply(clean_money)
             if '날짜' in exp.columns: exp['연월'] = pd.to_datetime(exp['날짜']).dt.strftime('%Y-%m')
 
+        # [수입내역]
         if not inc.empty:
             inc = clean_date(inc)
             if '금액' in inc.columns: inc['금액'] = inc['금액'].apply(clean_money)
 
+        # [고정지출] - 시트에 '항목'이라고 되어 있음
         if not fix.empty:
             fix = clean_date(fix)
             if '금액' in fix.columns: fix['금액'] = fix['금액'].apply(clean_money)
             
+        # [대출] - 시트에 '잔액'이라고 되어 있음
         if not loan.empty:
             if '잔액' in loan.columns: loan['잔액'] = loan['잔액'].apply(clean_money)
 
+        # [예산계획] - 시트에 '예산'이라고 되어 있음
         if not budget_plan.empty:
-             for col in ['예산', '금액']:
-                if col in budget_plan.columns: budget_plan[col] = budget_plan[col].apply(clean_money)
+             if '예산' in budget_plan.columns: budget_plan['예산'] = budget_plan['예산'].apply(clean_money)
 
-        # 구글 캘린더 (선택사항)
+        # 구글 캘린더 연동
         google_events = []
         try:
             service = build('calendar', 'v3', credentials=creds)
@@ -121,7 +126,7 @@ data = load_data()
 df, inc_df, fix_df, sch_df, loan_df, mission_df, budget_df, g_events = data
 
 # =========================================================
-# 3. 화면 구성 (사이드바 + 메인)
+# 3. 화면 구성
 # =========================================================
 with st.sidebar:
     st.title("가계부 쓰기 ✍️")
@@ -138,8 +143,9 @@ with st.sidebar:
             if st.form_submit_button("지출 저장", type="primary", use_container_width=True):
                 try:
                     client = gspread.authorize(get_credentials())
+                    # 지출내역 시트 순서: 날짜, 누가, 분류, 내용, 결제, 금액
                     client.open_by_url(SHEET_URL).worksheet("지출내역").append_row([str(d), w, c, i, p, m])
-                    st.toast("✅ 지출이 저장되었습니다!")
+                    st.toast("✅ 저장 완료!")
                     st.cache_data.clear()
                     time.sleep(1)
                     st.rerun()
@@ -148,23 +154,23 @@ with st.sidebar:
     with tab2: # 수입
         with st.form("in_form", border=False):
             d = st.date_input("날짜", datetime.now())
-            c = st.selectbox("분류", ["월급", "보너스", "이자", "기타"])
+            c = st.selectbox("구분", ["월급", "보너스", "이자", "기타"]) # 분류 -> 구분
             i = st.text_input("내용")
             m = st.number_input("금액", step=10000)
             if st.form_submit_button("수입 저장", use_container_width=True):
                 try:
                     client = gspread.authorize(get_credentials())
+                    # 수입내역 시트 순서: 날짜, 구분, 내용, 금액
                     client.open_by_url(SHEET_URL).worksheet("수입내역").append_row([str(d), c, i, m])
-                    st.toast("💰 수입이 저장되었습니다!")
+                    st.toast("💰 저장 완료!")
                     st.cache_data.clear()
                     time.sleep(1)
                     st.rerun()
                 except: st.error("저장 실패")
 
-# 메인 대시보드
 st.title("은지 & 요한의 자산관리 🏡")
 
-# 상단 요약 카드
+# 상단 요약
 if not df.empty and '금액' in df.columns:
     this_month = datetime.now().strftime('%Y-%m')
     this_month_sum = df[df['연월'] == this_month]['금액'].sum()
@@ -175,7 +181,7 @@ if not df.empty and '금액' in df.columns:
         </div>
     """, unsafe_allow_html=True)
 
-tabs = st.tabs(["내역 조회", "고정지출", "대출 현황", "식비 미션", "캘린더"])
+tabs = st.tabs(["내역 조회", "고정지출", "대출 현황", "예산 계획", "캘린더"])
 
 with tabs[0]: # 내역 조회
     if not df.empty:
@@ -183,43 +189,46 @@ with tabs[0]: # 내역 조회
         sel_month = st.selectbox("월 선택", month_list)
         if sel_month:
             view = df[df['연월'] == sel_month].sort_values('날짜', ascending=False)
-            st.dataframe(view, use_container_width=True, hide_index=True)
+            # 불필요한 연월 컬럼 숨기고 보여주기
+            st.dataframe(view.drop(columns=['연월'], errors='ignore'), use_container_width=True, hide_index=True)
     else:
-        st.info("💡 아직 지출 내역이 없어요. 왼쪽에서 첫 지출을 기록해보세요!")
+        st.info("데이터를 불러오는 중이거나 데이터가 없습니다.")
 
 with tabs[1]: # 고정지출
     if not fix_df.empty:
         st.dataframe(fix_df, use_container_width=True, hide_index=True)
         if '금액' in fix_df.columns:
-            st.caption(f"매달 나가는 돈: 약 {fix_df['금액'].sum():,.0f}원")
+            st.caption(f"💰 고정지출 합계: {fix_df['금액'].sum():,.0f}원")
     else:
-        st.info("💡 '고정지출' 시트에 데이터가 없거나 제목줄(1행)이 안 맞아요.")
+        st.info("'고정지출' 탭의 데이터가 없거나 제목줄(1행)을 확인해주세요.")
 
 with tabs[2]: # 대출
     if not loan_df.empty:
         st.dataframe(loan_df, use_container_width=True, hide_index=True)
         if '잔액' in loan_df.columns:
-            st.caption(f"남은 대출금 합계: {loan_df['잔액'].sum():,.0f}원")
+            st.caption(f"🏦 대출 잔액 합계: {loan_df['잔액'].sum():,.0f}원")
     else:
-        st.info("💡 '대출' 시트가 비어있어요.")
+        st.info("'대출' 탭의 데이터가 없습니다.")
 
-with tabs[3]: # 식비 미션
-    if not mission_df.empty:
-        st.dataframe(mission_df, use_container_width=True, hide_index=True)
+with tabs[3]: # 예산 계획
+    if not budget_df.empty:
+        st.dataframe(budget_df, use_container_width=True, hide_index=True)
     else:
-        st.info("💡 '식비미션' 시트를 작성하면 목표 달성 현황을 볼 수 있어요.")
+        st.info("'예산계획' 탭의 데이터가 없습니다.")
 
 with tabs[4]: # 캘린더
-    # 구글 캘린더 일정 + 가계부 일정 합치기
     events = g_events.copy()
-    if not sch_df.empty:
+    if not sch_df.empty and '날짜' in sch_df.columns and '내용' in sch_df.columns:
         for _, row in sch_df.iterrows():
             events.append({
-                "title": f"💰 {row['내용']}",
+                "title": f"📝 {row['내용']}",
                 "start": str(row['날짜']),
-                "backgroundColor": "#ffec99",
+                "backgroundColor": "#fff9db",
                 "textColor": "#000000"
             })
     
     calendar_options = {
-        "headerToolbar
+        "headerToolbar": {"left": "prev,next today", "center": "title", "right": "dayGridMonth,listMonth"},
+        "initialView": "dayGridMonth",
+    }
+    calendar(events=events, options=calendar_options)
