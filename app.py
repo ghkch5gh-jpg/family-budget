@@ -151,7 +151,7 @@ def get_credentials():
             'https://www.googleapis.com/auth/drive',
             'https://www.googleapis.com/auth/calendar.readonly'
         ]
-        creds = ServiceAccountCredentials.from_json_keyfile_name('service_account.json', scope)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
         return creds
     except Exception:
         return None
